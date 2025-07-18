@@ -60,31 +60,77 @@ def write_text(page, row, text="", end_of_table_width=0.0, end_of_page_width=0, 
     #print(f"--- Text is this wide: {pymupdf.get_text_length(text)}")
     #print( f"--- Text was written with: {page.insert_text(pymupdf.Point(x, y), text)}")
 
-    if not_important:
-        y = find_y(row, page)
-        point = pymupdf.Point(end_of_table_width + 1.0, y)
-        print(point)
-        page.insert_text(point, "---")
-        print(f"text: ---")
-    else:
-        last_cell = row.cells[-1]
-        x1 = end_of_table_width + 1.0
-        y1 = last_cell[1]
-        x2 = end_of_page_width
-        y2 = last_cell[3]
-        rect = (x1, y1, x2, y2)
-
-        for i in range(7):
-            success = page.insert_textbox(rect, text, fontsize=11-i)
-            if success >= 0:
-                print(f"i: {i}, text: {text}")
-                return 1
-        return 0
+    for i in range(7):
+        success = page.insert_textbox(rect, text, fontsize=11-i)
+        if success >= 0:
+            print(f"i: {i}, text: {text}")
+            return 1
+    return 0
 
 # make first line in save the headers i.e. page-nr., transactioncode, ... (non IT person readable)
 # (save in csv: Transaction-code, page-nr, x (in case of the table width changing), y1, y_delta (in case the country is too long), y1+y_delta/2 (mid of the row))
 # save in csv: Transaction-code, page-nr, x (in case of the table width changing), y0, y1, y2, y3 (y0 = no new line, y1 = 1 new line split in country name, ...)
 def extract_transaction_codes():
+    with open('transactions.csv', 'w', newline='') as csvfile:
+        transactionwriter = csv.writer(csvfile, delimiter=',', quotechar='|',
+                                       quoting=csv.QUOTE_MINIMAL)
+
+        doc = fitz.open("MSR-202007 Kopie.PDF") # open a document
+
+        #for j, page in enumerate(doc):
+        page = doc[3] # selecet page 4
+        tabs = page.find_tables()  # find the all tables
+        tab = tabs[1] # for PayPal the first table is not of interest for us
+        text_list = tab.extract()  # get text for all the rows as a list
+        column_count = len(tab.header.names) # get the shape of the table that should be headers x rows
+        end_of_table_width = tab.bbox[2] + 1.0
+        end_of_page_width = page.bound()[2]
+
+        for i, row in enumerate(text_list):
+            # to be removed:
+            text_to_write = "Hello World"
+            if i == 1:
+                text_to_write = "United Kingdom"
+            elif i == 4:
+                text_to_write = "Netherlands"
+            elif i == 7:
+                text_to_write = "rio de janeiro"
+            # :till here
+
+            # Skipp header row
+            if i == 0:
+                continue
+
+            # If the empty cells in a row do not get recognized or a cell does not get recognized, then throw an exception
+            current_row_size = len(text_list[i])
+            if current_row_size != column_count:
+                raise Exception(
+                    f"Row is missing/ has too many elements. It should have been {column_count} big, but is {current_row_size}")
+
+            not_important = 0
+            if is_row_negative(text_list[i][5]):
+                not_important = 1
+
+            # y for "---" (no country)
+            y = find_y(tab.rows[i], page)
+
+            # Textbox points
+            most_right_cell = tab.rows[i].cells[-1]
+            x1 = end_of_table_width
+            y1 = most_right_cell[1]
+            x2 = end_of_page_width
+            y2 = most_right_cell[3]
+            rect = (x1, y1, x2, y2)
+
+            # transactionCode, pageNr., table_width (x1) , y1, x2, y2, x1-y2 as rect, y, not_important
+            transactionwriter.writerow([text_list[i][4], 3, x1, y1, x2, y2, rect, y, not_important])
+        show_modified_page(page)
+
+
+# make first line in save the headers i.e. page-nr., transactioncode, ... (non IT person readable)
+# (save in csv: Transaction-code, page-nr, x (in case of the table width changing), y1, y_delta (in case the country is too long), y1+y_delta/2 (mid of the row))
+# save in csv: Transaction-code, page-nr, x (in case of the table width changing), y0, y1, y2, y3 (y0 = no new line, y1 = 1 new line split in country name, ...)
+def temp():
     with open('transactions.csv', 'w', newline='') as csvfile:
         transactionwriter = csv.writer(csvfile, delimiter=',', quotechar='|',
                                        quoting=csv.QUOTE_MINIMAL)
@@ -129,6 +175,16 @@ def extract_transaction_codes():
             #transactionwriter.writerow([text_list[i][4], "TEMP 3 page", end_of_table_width, y])
         show_modified_page(page)
 
+# use python menu to have custom ui?
+# have a mode for:
+    # -> automatic code extraction, paypal api, writing on pdf
+    # -> and manual code extraction, paypal api, writing on pdf
+# When the pdf is getting written on we need to write on the pdf to make the preview (with row number),
+#   but we have to make the changes on the csv file and at the end apply all changes
+#   again without a preview
+# It should show one page at a time so that you could check for errors. You then can
+#   type c to continue or the row number, that you want to edit. Then type the new country.
+#   close the preview to get to the next page?
 
 if __name__ == '__main__':
     extract_transaction_codes()
