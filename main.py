@@ -41,31 +41,9 @@ def find_y(row, page):
     y1, y2 = 1, 3
     final_y = (row.cells[1][y2]-row.cells[1][y1])/2 + row.cells[1][y1]
     offset = 5
-    final_y -= offset
-    print(f"final y value: {final_y}")
+    final_y += offset
+    print(f"final y value: {final_y}, row_cells: {row.cells[1]}")
     return final_y #
-
-# TODO: 1. Select the right text size and font!
-#       2. Then check for the offset and make 3-4 offsets for no, 1,2,3 new lines in the country name
-#       3. Now save all 4 versions in the csv
-
-def write_text_at_x_and_y(page, text, end_of_table_width, end_of_page_width, row):
-    #print(f"--- Text is this wide: {pymupdf.get_text_length(text)}")
-    #print( f"--- Text was written with: {page.insert_text(pymupdf.Point(x, y), text)}")
-    last_cell = row.cells[-1]
-    x1 = end_of_table_width + 1.0
-    y1 = last_cell[1]
-    x2 = end_of_page_width
-    y2 = last_cell[3]
-    rect = (x1, y1, x2, y2)
-
-
-    for i in range(7):
-        success = page.insert_textbox(rect, text, fontsize=11-i)
-        if success >= 0:
-            print(f"i: {i}, text: {text}")
-            return 1
-    return 0
 
 def show_modified_page(page):
     show_image(page, f"Table & Header BBoxes")
@@ -78,6 +56,32 @@ def is_row_negative(text):
     row_value = float(american_comma_string)
     return row_value < 0
 
+def write_text(page, row, text="", end_of_table_width=0.0, end_of_page_width=0, not_important=False):
+    #print(f"--- Text is this wide: {pymupdf.get_text_length(text)}")
+    #print( f"--- Text was written with: {page.insert_text(pymupdf.Point(x, y), text)}")
+
+    if not_important:
+        y = find_y(row, page)
+        point = pymupdf.Point(end_of_table_width + 1.0, y)
+        print(point)
+        page.insert_text(point, "---")
+        print(f"text: ---")
+    else:
+        last_cell = row.cells[-1]
+        x1 = end_of_table_width + 1.0
+        y1 = last_cell[1]
+        x2 = end_of_page_width
+        y2 = last_cell[3]
+        rect = (x1, y1, x2, y2)
+
+        for i in range(7):
+            success = page.insert_textbox(rect, text, fontsize=11-i)
+            if success >= 0:
+                print(f"i: {i}, text: {text}")
+                return 1
+        return 0
+
+# make first line in save the headers i.e. page-nr., transactioncode, ... (non IT person readable)
 # (save in csv: Transaction-code, page-nr, x (in case of the table width changing), y1, y_delta (in case the country is too long), y1+y_delta/2 (mid of the row))
 # save in csv: Transaction-code, page-nr, x (in case of the table width changing), y0, y1, y2, y3 (y0 = no new line, y1 = 1 new line split in country name, ...)
 def extract_transaction_codes():
@@ -96,8 +100,6 @@ def extract_transaction_codes():
         end_of_table_width = tab.bbox[2]
         end_of_page_width = page.bound()[2]
 
-        #highlight_headers_and_tables_found(tabs, page) # highlight tables with headers
-
         for i, row in enumerate(text_list):
             text_to_write = "Hello World"
             if i == 1:
@@ -107,20 +109,22 @@ def extract_transaction_codes():
             elif i == 7:
                 text_to_write = "rio de janeiro"
 
+            not_important = False
+
             if i == 0:
                 continue
 
+            # If the empty cells in a row do not get recognized or a cell does not get recognized, then throw an exception
             current_row_size = len(text_list[i])
             if current_row_size != column_count:
                 raise Exception(
                     f"Row is missing/ has too many elements. It should have been {column_count} big, but is {current_row_size}")
 
             if is_row_negative(text_list[i][5]):
-                text_to_write = "---"
+                not_important = True
 
             print(f"i: {i}, row: {row}")
-            #y = find_y(tab.rows[i], page) # get x and y of the country name
-            write_text_at_x_and_y(page, text_to_write, end_of_table_width, end_of_page_width, tab.rows[i]) # modify the pdf to write text at specific location
+            write_text(page, tab.rows[i], text_to_write, end_of_table_width, end_of_page_width, not_important) # modify the pdf to write text at specific location
 
             #transactionwriter.writerow([text_list[i][4], "TEMP 3 page", end_of_table_width, y])
         show_modified_page(page)
