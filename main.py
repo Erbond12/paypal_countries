@@ -1,8 +1,6 @@
-from calendar import month
 from datetime import datetime
-from idlelib.pyparse import trans
-from logging import exception
 
+import matplotlib
 import pymupdf
 import fitz
 import csv
@@ -39,6 +37,7 @@ def show_image(item, title=""):
     DPI = 150  # use this resolution
     import numpy as np
     import matplotlib.pyplot as plt
+    matplotlib.use('TkAgg')
 
     # %matplotlib inline
     pix = item.get_pixmap(dpi=DPI)
@@ -114,9 +113,15 @@ def get_date(tab):
     USA_start_second_month_str = USA_start_second_month.strftime('%Y-%m-%d') + timezone
     USA_end_second_month_str = USA_end_second_month.strftime('%Y-%m-%d') + timezone
 
-    list_of_dates.append([USA_start_first_month_str, USA_end_first_month_str])
-    list_of_dates.append([USA_start_unedited_str, USA_end_unedited_str])
-    list_of_dates.append([USA_start_second_month_str, USA_end_second_month_str])
+    #list_of_dates.append([USA_start_first_month_str, USA_end_first_month_str])
+    #list_of_dates.append([USA_start_unedited_str, USA_end_unedited_str])
+    #list_of_dates.append([USA_start_second_month_str, USA_end_second_month_str])
+    list_of_dates.append(USA_start_first_month_str)
+    list_of_dates.append(USA_end_first_month_str)
+    list_of_dates.append(USA_start_unedited_str)
+    list_of_dates.append(USA_end_unedited_str)
+    list_of_dates.append(USA_start_second_month_str)
+    list_of_dates.append(USA_end_second_month_str)
 
     print(USA_start_first_month)
     print(USA_end_first_month)
@@ -135,12 +140,17 @@ def get_date(tab):
 # save in csv: Transaction-code, page-nr, x (in case of the table width changing), y0, y1, y2, y3 (y0 = no new line, y1 = 1 new line split in country name, ...)
 def extract_transaction_codes():
     doc = fitz.open(pdf_to_read) # open a document
-    rows_to_save_as_csv = [["RowNr.", "TransactionCode", "PageNr", "Table_width (x1)" , "y1", "x2", "y2", "y", "not_important", "Country_code", "Country"]]
+    rows_to_save_as_csv = []
 
     # get date for paypal api call
     page = doc[0]
     tabs = page.find_tables()
     date = get_date(tabs[0])
+
+    rows_to_save_as_csv.append(date)
+    header_row = ["RowNr.", "TransactionCode", "PageNr", "Table_width (x1)" , "y1", "x2", "y2", "y", "not_important", "Country_code", "Country"]
+    rows_to_save_as_csv.append(header_row)
+
 
     #for j, page in enumerate(doc):
     page = doc[3] # selecet page 4
@@ -152,16 +162,6 @@ def extract_transaction_codes():
     end_of_page_width = page.bound()[2]
 
     for i, row in enumerate(text_list):
-        # to be removed:
-        text_to_write = "Hello World"
-        if i == 1:
-            text_to_write = "United Kingdom"
-        elif i == 4:
-            text_to_write = "Netherlands"
-        elif i == 7:
-            text_to_write = "rio de janeiro"
-        # :till here
-
         # Skipp header row
         if i == 0:
             continue
@@ -267,73 +267,156 @@ def get_access_token():
     print(response.json())
     return response.json()["access_token"]
 
-def get_transactions(access_token):
+def get_transactions(access_token, start_date, end_date):
     #transaction_detail_url = "https://api-m.sandbox.paypal.com/v1/reporting/transactions?start_date=2025-06-30T00:00:00.000Z&end_date=2025-06-30T23:59:59.999Z"
-    transaction_detail_url = "https://api-m.paypal.com/v1/reporting/transactions?fields=transaction_info,payer_info,shipping_info,auction_info,cart_info,incentive_info,store_info&start_date=2025-07-01T00:00:00.000Z&end_date=2025-07-17T23:59:59.999Z"
-    headers = {"Authorization": "Bearer " + access_token}
+    transaction_detail_url = ("https://api-m.paypal.com/v1/reporting/transactions")
+    print(f"--start: {start_date}, end: {end_date}")
 
-    transactions_response = requests.get(transaction_detail_url, headers=headers)
-    print(transactions_response.json())
-    return transactions_response.json()
+    # make first api call to see how many more pages exist
+    parameters = {
+        "fields": "transaction_info,payer_info,shipping_info,auction_info,cart_info,incentive_info,store_info",
+        "start_date": start_date,
+        "end_date": end_date,
+        "page": 1}
+    headers = {"Authorization": "Bearer " + access_token}
+    transactions_response = requests.get(transaction_detail_url, headers=headers, params=parameters)
+    transactions_response = transactions_response.json()
+    response = transactions_response["transaction_details"]
+    pages_total = transactions_response["total_pages"]
+
+    # make as many api calls as there are pages left
+    page = 1
+    while pages_total != page:
+        page+=1
+        print(f"page: {page}, psize: {pages_total}")
+        parameters = {"fields": "transaction_info,payer_info,shipping_info,auction_info,cart_info,incentive_info,store_info",
+                      "start_date": start_date,
+                      "end_date": end_date,
+                      "page": page}
+
+        headers = {"Authorization": "Bearer " + access_token}
+        transactions_response = requests.get(transaction_detail_url, headers=headers, params=parameters)
+        transactions_response = transactions_response.json()
+        response = response + transactions_response["transaction_details"]
+
+    print([len(i) for i in response])
+    print(response[0])
+    return response
 
 def load_transactions_csv():
     csv_rows = []
     with open(transactionsCSVFile, mode="r") as file:
         csv_reader = csv.reader(file)
-        next(csv_reader, None) # Skip header row
+
+        dates = next(csv_reader) # get date row
+        headers = next(csv_reader) # get header row
+        print(dates)
+        print(headers)
         for row in csv_reader:
             csv_rows.append(row)
-    return csv_rows
+    return [dates, headers, csv_rows]
 
 def request_paypal_countries():
+    # Load the csv file with all the transaction codes
+    loaded_csv = load_transactions_csv()
+    dates = loaded_csv[0] # needed as a time frame for the paypal api request
+    header = loaded_csv[1]
+    csv_rows = loaded_csv[2]
+
+    # Make API call to PayPal
     access_token = get_access_token()
-    transactions_response = get_transactions(access_token)
-    transactions = transactions_response["transaction_details"]
+    transactions0 = get_transactions(access_token, dates[0], dates[1])
+    transactions1 = get_transactions(access_token, dates[2], dates[3])
+    transactions2 = get_transactions(access_token, dates[4], dates[5])
+    print(transactions0)
+    print(transactions1)
+    print(transactions2)
+    # transactions_response0 = get_transactions(access_token, dates[0], dates[1])
+    # transactions_response1 = get_transactions(access_token, dates[2], dates[3])
+    # transactions_response2 = get_transactions(access_token, dates[4], dates[5])
+    # transactions0 = transactions_response0["transaction_details"]
+    # transactions1 = transactions_response1["transaction_details"]
+    # transactions2 = transactions_response2["transaction_details"]
+    # print(transactions0)
+    # print(transactions1)
+    # print(transactions2)
+    # print(f"total_items: {transactions_response0["total_items"]}, len: {len(transactions0)}")
+    # print(f"total_items: {transactions_response1["total_items"]}, len: {len(transactions1)}")
+    # print(f"total_items: {transactions_response2["total_items"]}, len: {len(transactions2)}")
+    print(len(transactions0) + len(transactions1) + len(transactions2))
+    transactions_duplicates = transactions0 + transactions1 + transactions2
+    transactions = transactions_duplicates
 
     # Take response and reformat it to have a transaction code as key in the dict.
     #   -> easy access and no search needed
-    easy_transactions_dictionary = {}
+    easy_access_transactions_dictionary = {}
+    print(f" ------- {len(transactions)}: {transactions}")
+    counter = 0
+    duplicates = {}
     for i, transaction in enumerate(transactions):
         key = transaction["transaction_info"]["transaction_id"]
-        value = transaction["transaction_info"]
-        easy_transactions_dictionary[key] = value
+        value = transaction
 
-    # Check
-    csv_rows = load_transactions_csv()
-    for row in csv_rows:
-        transaction_code = row[1]
-        not_important = row[-1]
+        if key in easy_access_transactions_dictionary:
+            duplicates[key] = value
+        else:
+            counter += 1
 
-        if transaction_code in easy_transactions_dictionary and not_important == 0:
-            payer_country = easy_transactions_dictionary["payer_info"]["country_code"]
-            shipping_country = easy_transactions_dictionary["shipping_info"]["address"]["country_code"]
+        easy_access_transactions_dictionary[key] = value
 
-            if payer_country != shipping_country: #TODO: what to do in this case -> let human check this
-                raise exception(f"Payer info has a different value than shipping info: payer_info: {payer_country} != shipping_info: {shipping_country}")
+    print(f"counter: {counter}, len(duplicates): {len(duplicates)}, len(easy_acc_tran_dict): {len(easy_access_transactions_dictionary)}, dups: {duplicates}")
+
+    print(csv_rows)
+    for i, row in enumerate(csv_rows):
+        transaction_code = row[1] #TODO make the index and column number a dict to make changes to columns global not local
+        not_important = int(row[-1])
+        print(row)
+        print(f"1: {transaction_code in easy_access_transactions_dictionary}, 2: {not_important==0}, 3: {type(not_important)}")
+        print(easy_access_transactions_dictionary[transaction_code])
+        if transaction_code in easy_access_transactions_dictionary and not_important == 0:
+            pp_response_for_that_trans_code = easy_access_transactions_dictionary[transaction_code]
+            payer_country_exists, shipping_country_exists = False, False
+            payer_country, shipping_country = "", ""
+            if "payer_info" in pp_response_for_that_trans_code:
+                payer_country_exists = True
+                payer_country = easy_access_transactions_dictionary[transaction_code]["payer_info"]["country_code"]
+            elif "shipping_info" in pp_response_for_that_trans_code:
+                shipping_country_exists = True
+                shipping_country = easy_access_transactions_dictionary[transaction_code]["shipping_info"]["address"]["country_code"]
+
+            if payer_country != shipping_country and (payer_country_exists and shipping_country_exists): #TODO: what to do in this case -> let human check this
+                error_message = "Payer info has a different value than shipping info: payer_info: " + payer_country + " != shipping_info: " + shipping_country + ". (If temp_value_x there are no country info included in PayPal response)"
+                raise ValueError(error_message)
+
+            country_code = payer_country
 
             start = time.time()
             # use the following to= parameters for the converter
             # 'name_official' -> if short is too short
             # 'name_short' -> if official is too long
-            print(cc.convert(["DE", "armenia"], to='name_short'))
-            print(cc.valid_class)
+            # print(cc.valid_class)
+            country_name = cc.convert(country_code, to='name_official')
             end = time.time()
             print(end-start)
 
-            row.append(payer_country) # TODO: check if this changes the row in the csv_rows (is it the original or a copy that changes)
+            print(f"--- Hello world {csv_rows[i]}, country: {country_name}")
+            csv_rows[i].append(country_name) # TODO: check if this changes the row in the csv_rows (is it the original or a copy that changes)
+    print(csv_rows)
 
     # TODO: make a function for this code (second usage in extract transaction codes)
     with open(transactionsCSVFile, 'w', newline='') as csvfile:
         transactionwriter = csv.writer(csvfile, delimiter=',', quotechar='|',
                                        quoting=csv.QUOTE_MINIMAL)
         # rowNr., transactionCode, pageNr., table_width (x1) , y1, x2, y2, y, not_important
+        transactionwriter.writerow(dates)
+        transactionwriter.writerow(header)
         transactionwriter.writerows(csv_rows)
 
-    print(easy_transactions_dictionary)
-    print(len(easy_transactions_dictionary))
+    print(easy_access_transactions_dictionary)
+    print(len(easy_access_transactions_dictionary))
     print(len(transactions))
-    print("9JG1998130909105X" in easy_transactions_dictionary)
-    print(easy_transactions_dictionary["9JG1998130909105X"])
+    #print("9JG1998130909105X" in easy_transactions_dictionary)
+    #print(easy_transactions_dictionary["9JG1998130909105X"])
 
 def write_countries_on_pdf():
     print("write")
